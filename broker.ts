@@ -58,15 +58,24 @@ db.run(`
   )
 `);
 
+// Fork: signal 0 answers three ways, and only one of them means dead.
+// EPERM means the process exists but belongs to another user (a peer registered
+// by a service account, or a pid the broker simply may not signal) — treating
+// that as dead silently unregisters a live peer and drops its messages.
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
 // Clean up stale peers (PIDs that no longer exist) on startup
 function cleanStalePeers() {
   const peers = db.query("SELECT id, pid FROM peers").all() as { id: string; pid: number }[];
   for (const peer of peers) {
-    try {
-      // Check if process is still alive (signal 0 doesn't kill, just checks)
-      process.kill(peer.pid, 0);
-    } catch {
-      // Process doesn't exist, remove it
+    if (!isProcessAlive(peer.pid)) {
       db.run("DELETE FROM peers WHERE id = ?", [peer.id]);
       db.run("DELETE FROM messages WHERE to_id = ? AND delivered = 0", [peer.id]);
     }
@@ -135,8 +144,11 @@ function generateId(): string {
 
 // --- Request handlers ---
 
-function handleRegister(body: RegisterRequest): RegisterResponse {
-  const id = generateId();
+function handleRegister(body: RegisterRequest & { id?: string }): RegisterResponse {
+  // Fork: caller may pin its own id. HCD backend registers as "hcd-dashboard"
+  // and Jarvis as "jarvis-<conversation>"; both compare the returned id against
+  // the one they sent, so a generated id would fail their registration check.
+  const id = body.id && body.id.trim() ? body.id.trim() : generateId();
   const now = new Date().toISOString();
 
   // Remove any existing registration for this PID (re-registration)
@@ -144,6 +156,8 @@ function handleRegister(body: RegisterRequest): RegisterResponse {
   if (existing) {
     deletePeer.run(existing.id);
   }
+  // A pinned id may already exist under a different pid (backend restart).
+  deletePeer.run(id);
 
   insertPeer.run(id, body.pid, body.cwd, body.git_root, body.tty, body.summary, now, now);
   return { id };
@@ -186,14 +200,9 @@ function handleListPeers(body: ListPeersRequest): Peer[] {
 
   // Verify each peer's process is still alive
   return peers.filter((p) => {
-    try {
-      process.kill(p.pid, 0);
-      return true;
-    } catch {
-      // Clean up dead peer
-      deletePeer.run(p.id);
-      return false;
-    }
+    if (isProcessAlive(p.pid)) return true;
+    deletePeer.run(p.id);
+    return false;
   });
 }
 

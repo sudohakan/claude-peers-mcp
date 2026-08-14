@@ -13,6 +13,7 @@
  *   { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
  */
 
+import fs from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -131,6 +132,50 @@ function getTty(): string | null {
     // ignore
   }
   return null;
+}
+
+// --- Fork: harness integration -------------------------------------------
+// Two things this stack needs that upstream does not provide:
+//   1. tty→name map written by the peer-auto-register SessionStart hook. The
+//      hook picks the session name; reading it here means the statusline shows
+//      a name from the first heartbeat, without waiting for the model to call
+//      set_summary.
+//   2. A file inbox. Channel push (notifications/claude/channel) only reaches
+//      the session when Claude Code runs with development channels loaded; the
+//      peer-message-fallback hook reads these files on UserPromptSubmit and is
+//      the delivery path that actually works here.
+
+const HOME = process.env.HOME ?? "";
+const TTY_NAME_MAP = `${HOME}/.claude/cache/peer-tty-names.json`;
+const INBOX_DIR = process.env.CLAUDE_PEERS_INBOX_DIR ?? "/tmp/claude-peers-inbox";
+const INBOX_ENABLED = process.env.CLAUDE_PEERS_NO_INBOX !== "1";
+const TTY_NAME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+function readTtyName(tty: string | null): string | null {
+  if (!tty) return null;
+  try {
+    const map = JSON.parse(fs.readFileSync(TTY_NAME_MAP, "utf8")) as Record<
+      string,
+      { name?: string; ts?: string }
+    >;
+    const entry = map[tty];
+    if (!entry?.name || !entry.ts) return null;
+    const age = Date.now() - new Date(entry.ts).getTime();
+    if (age < 0 || age > TTY_NAME_MAX_AGE_MS) return null;
+    return entry.name;
+  } catch {
+    return null;
+  }
+}
+
+function appendToInbox(msg: { from_id: string; from_summary: string; from_cwd: string; text: string; sent_at: string }) {
+  if (!INBOX_ENABLED || !myId) return;
+  try {
+    fs.mkdirSync(INBOX_DIR, { recursive: true });
+    fs.appendFileSync(`${INBOX_DIR}/${myId}.jsonl`, JSON.stringify(msg) + "\n");
+  } catch (e) {
+    log(`Inbox write failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // --- State ---
@@ -426,18 +471,33 @@ async function pollAndPushMessages() {
         // Non-critical, proceed without sender info
       }
 
-      // Push as channel notification — this is what makes it immediate
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: msg.text,
-          meta: {
-            from_id: msg.from_id,
-            from_summary: fromSummary,
-            from_cwd: fromCwd,
-            sent_at: msg.sent_at,
+      // Push as channel notification — this is what makes it immediate.
+      // Fork: a failure here must not cost the message, so the inbox write
+      // below runs either way (the message would otherwise be marked
+      // delivered by the broker and lost).
+      try {
+        await mcp.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: msg.text,
+            meta: {
+              from_id: msg.from_id,
+              from_summary: fromSummary,
+              from_cwd: fromCwd,
+              sent_at: msg.sent_at,
+            },
           },
-        },
+        });
+      } catch (e) {
+        log(`Channel push failed, falling back to inbox: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      appendToInbox({
+        from_id: msg.from_id,
+        from_summary: fromSummary,
+        from_cwd: fromCwd,
+        text: msg.text,
+        sent_at: msg.sent_at,
       });
 
       log(`Pushed message from ${msg.from_id}: ${msg.text.slice(0, 80)}`);
@@ -463,9 +523,19 @@ async function main() {
   log(`Git root: ${myGitRoot ?? "(none)"}`);
   log(`TTY: ${tty ?? "(unknown)"}`);
 
-  // 3. Generate initial summary via gpt-5.4-nano (non-blocking, best-effort)
+  // 3. Initial summary. Fork: the session name written by the peer-auto-register
+  // hook wins — it is what the statusline and the fleet view read, and it is
+  // available immediately. The LLM auto-summary below only runs when no name is
+  // mapped for this tty and an OpenAI key exists.
   let initialSummary = "";
+  const ttyName = readTtyName(tty);
+  if (ttyName) {
+    initialSummary = `${ttyName} — oturum başlıyor`;
+    log(`Session name from tty map: ${ttyName}`);
+  }
+
   const summaryPromise = (async () => {
+    if (initialSummary || !process.env.OPENAI_API_KEY) return;
     try {
       const branch = await getGitBranch(myCwd);
       const recentFiles = await getRecentFiles(myCwd);
@@ -484,8 +554,12 @@ async function main() {
     }
   })();
 
-  // Wait briefly for summary, but don't block startup
-  await Promise.race([summaryPromise, new Promise((r) => setTimeout(r, 3000))]);
+  // Wait briefly for summary, but don't block startup. With a name already in
+  // hand there is nothing to wait for — startup time counts against the MCP
+  // connect timeout.
+  if (!initialSummary) {
+    await Promise.race([summaryPromise, new Promise((r) => setTimeout(r, 3000))]);
+  }
 
   // 4. Register with broker
   const reg = await brokerFetch<RegisterResponse>("/register", {
