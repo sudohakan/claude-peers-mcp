@@ -148,7 +148,14 @@ function handleRegister(body: RegisterRequest & { id?: string }): RegisterRespon
   // Fork: caller may pin its own id. HCD backend registers as "hcd-dashboard"
   // and Jarvis as "jarvis-<conversation>"; both compare the returned id against
   // the one they sent, so a generated id would fail their registration check.
-  const id = body.id && body.id.trim() ? body.id.trim() : generateId();
+  // A caller-supplied id also selects which row gets deleted below, so it is
+  // constrained rather than trusted: printable, bounded, no path or control
+  // characters.
+  const wanted = (body.id ?? "").trim();
+  if (wanted && !/^[A-Za-z0-9._:-]{1,64}$/.test(wanted)) {
+    throw new Error(`invalid peer id: ${JSON.stringify(wanted).slice(0, 80)}`);
+  }
+  const id = wanted ? wanted : generateId();
   const now = new Date().toISOString();
 
   // Remove any existing registration for this PID (re-registration)

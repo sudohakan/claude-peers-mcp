@@ -168,11 +168,27 @@ function readTtyName(tty: string | null): string | null {
   }
 }
 
+const INBOX_MAX_BYTES = 256 * 1024;
+
 function appendToInbox(msg: { from_id: string; from_summary: string; from_cwd: string; text: string; sent_at: string }) {
   if (!INBOX_ENABLED || !myId) return;
   try {
     fs.mkdirSync(INBOX_DIR, { recursive: true });
-    fs.appendFileSync(`${INBOX_DIR}/${myId}.jsonl`, JSON.stringify(msg) + "\n");
+    const file = `${INBOX_DIR}/${myId}.jsonl`;
+    // The reader (peer-message-fallback hook) truncates this on every user
+    // prompt, but a session that never prompts again -- or a hook that is
+    // disabled -- would let it grow without limit. Drop the oldest half rather
+    // than the newest message: the newest is the one still worth delivering.
+    try {
+      if (fs.statSync(file).size > INBOX_MAX_BYTES) {
+        const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+        fs.writeFileSync(file, lines.slice(Math.floor(lines.length / 2)).join("\n") + "\n");
+        log(`Inbox trimmed (was over ${INBOX_MAX_BYTES} bytes)`);
+      }
+    } catch {
+      // No file yet -- nothing to trim.
+    }
+    fs.appendFileSync(file, JSON.stringify(msg) + "\n");
   } catch (e) {
     log(`Inbox write failed: ${e instanceof Error ? e.message : String(e)}`);
   }
