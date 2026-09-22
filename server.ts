@@ -637,6 +637,17 @@ async function main() {
 
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
+
+  // A session that crashes, is SIGKILLed or loses its terminal sends no signal:
+  // stdin just closes, the intervals keep this process alive and the heartbeat
+  // keeps it listed as a live peer. 88 such orphans once held 5.7 GB. Exit when
+  // stdin ends or when we get reparented (parent gone).
+  process.stdin.on("end", cleanup);
+  process.stdin.on("close", cleanup);
+  const parentAtStart = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parentAtStart) cleanup();
+  }, 10_000).unref();
 }
 
 main().catch((e) => {
