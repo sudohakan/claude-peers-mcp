@@ -239,6 +239,22 @@ function handleUnregister(body: { id: string }): void {
   deletePeer.run(body.id);
 }
 
+// --- Request guard ---
+
+export function rejectBrowserRequest(req: Request, port: number): Response | null {
+  const host = req.headers.get("host") ?? "";
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+    return Response.json({ error: "host not allowed" }, { status: 403 });
+  }
+  if (req.headers.get("origin")) {
+    return Response.json({ error: "browser origin not allowed" }, { status: 403 });
+  }
+  if (req.method === "POST" && !(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+    return Response.json({ error: "application/json required" }, { status: 415 });
+  }
+  return null;
+}
+
 // --- HTTP Server ---
 
 Bun.serve({
@@ -247,6 +263,11 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const path = url.pathname;
+
+    // DNS-rebinding / browser CSRF: a web page can reach 127.0.0.1 but cannot forge Host, and its requests carry
+    // Origin; a "simple" text/plain POST needs no preflight, so JSON is required too. Local clients pass all three.
+    const refusal = rejectBrowserRequest(req, PORT);
+    if (refusal) return refusal;
 
     if (req.method !== "POST") {
       if (path === "/health") {
