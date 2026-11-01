@@ -158,9 +158,10 @@ function handleRegister(body: RegisterRequest & { id?: string }): RegisterRespon
   const id = wanted ? wanted : generateId();
   const now = new Date().toISOString();
 
-  // Remove any existing registration for this PID (re-registration)
+  // Remove any existing registration for this PID (re-registration). A pinned id is
+  // exempt: one process may hold several, and a reply route must survive the next one.
   const existing = db.query("SELECT id FROM peers WHERE pid = ?").get(body.pid) as { id: string } | null;
-  if (existing) {
+  if (!wanted && existing) {
     deletePeer.run(existing.id);
   }
   // A pinned id may already exist under a different pid (backend restart).
