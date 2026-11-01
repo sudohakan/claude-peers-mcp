@@ -64,3 +64,24 @@ test("re-registering a pinned id keeps a single row", async () => {
   await register("jarvis-a");
   expect((await listIds()).filter((id) => id === "jarvis-a")).toHaveLength(1);
 });
+
+test("kill-broker stops the broker and leaves its connected clients running", async () => {
+  const port = PORT + 1;
+  const env = { ...process.env, CLAUDE_PEERS_PORT: String(port), CLAUDE_PEERS_DB: join(DIR, "kill.db") };
+  const target = Bun.spawn(["bun", join(import.meta.dir, "broker.ts")], { env, stdout: "ignore", stderr: "ignore" });
+  for (let i = 0; i < 100; i++) {
+    if (await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.ok).catch(() => false)) break;
+    await Bun.sleep(50);
+  }
+  const holdConnection = `await Bun.connect({ hostname: "127.0.0.1", port: ${port}, socket: { data() {} } }); setInterval(() => {}, 1000);`;
+  const client = Bun.spawn(["bun", "-e", holdConnection], { stdout: "ignore", stderr: "ignore" });
+  await Bun.sleep(400);
+
+  Bun.spawnSync(["bun", join(import.meta.dir, "cli.ts"), "kill-broker"], { env });
+  await target.exited;
+  await Bun.sleep(100);
+
+  const clientAlive = client.exitCode === null;
+  client.kill();
+  expect(clientAlive).toBe(true);
+});
