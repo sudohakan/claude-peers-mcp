@@ -145,9 +145,9 @@ function generateId(): string {
 // --- Request handlers ---
 
 function handleRegister(body: RegisterRequest & { id?: string }): RegisterResponse {
-  // Fork: caller may pin its own id. HCD backend registers as "hcd-dashboard"
-  // and Jarvis as "jarvis-<conversation>"; both compare the returned id against
-  // the one they sent, so a generated id would fail their registration check.
+  // Fork: caller may pin its own id. Long-lived clients (a dashboard backend, a
+  // leader session) register under a fixed name and compare the returned id
+  // against the one they sent, so a generated id would fail that check.
   // A caller-supplied id also selects which row gets deleted below, so it is
   // constrained rather than trusted: printable, bounded, no path or control
   // characters.

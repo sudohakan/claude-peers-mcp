@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bunx tsc --noEmit -p .
+      - name: Test
+        run: bun test
+      - name: Version check
+        run: |
+          pkg=$(bun -e 'console.log(require("./package.json").version)')
+          grep -q "version: \"$pkg\"" server.ts || { echo "server.ts version != package.json $pkg"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            [ "${GITHUB_REF#refs/tags/v}" = "$pkg" ] || { echo "tag != package.json $pkg"; exit 1; }
+          fi

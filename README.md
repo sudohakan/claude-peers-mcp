@@ -1,5 +1,10 @@
 # claude-peers
 
+[![CI](https://github.com/sudohakan/claude-peers-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sudohakan/claude-peers-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sudohakan/claude-peers-mcp)](https://github.com/sudohakan/claude-peers-mcp/releases)
+
+> Fork of [louislva/claude-peers-mcp](https://github.com/louislva/claude-peers-mcp). It adds pinned peer ids, a file inbox for sessions without development channels, and broker hardening. See [What this fork adds](#what-this-fork-adds) and the [changelog](CHANGELOG.md).
+
 Let your Claude Code instances find each other and talk. When you're running 5 sessions across different projects, any Claude can discover the others and send messages that arrive instantly.
 
 ```
@@ -18,7 +23,7 @@ Let your Claude Code instances find each other and talk. When you're running 5 s
 ### 1. Install
 
 ```bash
-git clone https://github.com/louislva/claude-peers-mcp.git ~/claude-peers-mcp   # or wherever you like
+git clone https://github.com/sudohakan/claude-peers-mcp.git ~/claude-peers-mcp   # or wherever you like
 cd ~/claude-peers-mcp
 bun install
 ```
@@ -105,6 +110,22 @@ bun cli.ts send <id> <msg>   # send a message into a Claude session
 bun cli.ts kill-broker       # stop the broker
 ```
 
+## What this fork adds
+
+**Pinned peer ids.** `POST /register` accepts an optional `id` matching `[A-Za-z0-9._:-]{1,64}`. A dashboard backend or another long-lived client can keep the same address across restarts; re-registering it replaces the old row without touching other peers in the same process.
+
+**File inbox.** Channel push only reaches a session started with `--dangerously-load-development-channels`. Every delivered message is also appended as one JSON line to `$CLAUDE_PEERS_INBOX_DIR/<peer-id>.jsonl`:
+
+```json
+{"from_id":"a1b2c3d4","from_summary":"refactoring auth","from_cwd":"/home/me/app","text":"done?","sent_at":"2026-11-03T12:00:00.000Z"}
+```
+
+A `UserPromptSubmit` hook can read and truncate that file to deliver messages without the flag. The directory is created `0700`, files `0600`; files over 256 KB drop their oldest half.
+
+**Session names from a tty map.** If `CLAUDE_PEERS_TTY_NAMES` points to a JSON object like `{"/dev/pts/3": {"name": "Alice", "ts": "<ISO time>"}}` (entries older than 12 hours are ignored), the peer gets that name from its first heartbeat.
+
+**Broker hardening.** The broker answers only `Host: 127.0.0.1:<port>` or `localhost:<port>`, rejects any request carrying `Origin`, and requires `application/json` on POST, so a web page cannot reach it through DNS rebinding or a simple form post. A peer owned by another user is no longer mistaken for dead, the MCP server exits when its session goes away, and `kill-broker` stops only the listener.
+
 ## Configuration
 
 | Environment variable | Default              | Description                           |
@@ -112,9 +133,16 @@ bun cli.ts kill-broker       # stop the broker
 | `CLAUDE_PEERS_PORT`  | `7899`               | Broker port                           |
 | `CLAUDE_PEERS_DB`    | `~/.claude-peers.db` | SQLite database path                  |
 | `OPENAI_API_KEY`     | —                    | Enables auto-summary via gpt-5.4-nano |
+| `CLAUDE_PEERS_INBOX_DIR` | `/tmp/claude-peers-inbox` | File inbox directory (fork)      |
+| `CLAUDE_PEERS_NO_INBOX`  | unset                | Set to `1` to disable the file inbox (fork) |
+| `CLAUDE_PEERS_TTY_NAMES` | `~/.claude/cache/peer-tty-names.json` | tty→name map (fork) |
 
 ## Requirements
 
 - [Bun](https://bun.sh)
 - Claude Code v2.1.80+
 - claude.ai login (channels require it — API key auth won't work)
+
+## License
+
+MIT, see [LICENSE](LICENSE). Original work by Louis Arge; fork changes by Hakan Topçu.

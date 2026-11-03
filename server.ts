@@ -134,19 +134,18 @@ function getTty(): string | null {
   return null;
 }
 
-// --- Fork: harness integration -------------------------------------------
-// Two things this stack needs that upstream does not provide:
-//   1. tty→name map written by the peer-auto-register SessionStart hook. The
-//      hook picks the session name; reading it here means the statusline shows
-//      a name from the first heartbeat, without waiting for the model to call
-//      set_summary.
+// --- Fork: hook integration ----------------------------------------------
+// Two optional integration points upstream does not provide:
+//   1. tty→name map, written by a SessionStart hook that picks the session
+//      name. Reading it here gives the peer a name from the first heartbeat,
+//      without waiting for the model to call set_summary.
 //   2. A file inbox. Channel push (notifications/claude/channel) only reaches
-//      the session when Claude Code runs with development channels loaded; the
-//      peer-message-fallback hook reads these files on UserPromptSubmit and is
-//      the delivery path that actually works here.
+//      the session when Claude Code runs with development channels loaded; a
+//      UserPromptSubmit hook can read these files and deliver the messages
+//      without that flag.
 
 const HOME = process.env.HOME ?? "";
-const TTY_NAME_MAP = `${HOME}/.claude/cache/peer-tty-names.json`;
+const TTY_NAME_MAP = process.env.CLAUDE_PEERS_TTY_NAMES ?? `${HOME}/.claude/cache/peer-tty-names.json`;
 const INBOX_DIR = process.env.CLAUDE_PEERS_INBOX_DIR ?? "/tmp/claude-peers-inbox";
 const INBOX_ENABLED = process.env.CLAUDE_PEERS_NO_INBOX !== "1";
 const TTY_NAME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
@@ -173,9 +172,10 @@ const INBOX_MAX_BYTES = 256 * 1024;
 function appendToInbox(msg: { from_id: string; from_summary: string; from_cwd: string; text: string; sent_at: string }) {
   if (!INBOX_ENABLED || !myId) return;
   try {
-    fs.mkdirSync(INBOX_DIR, { recursive: true });
+    // Messages are private to the user: the default dir sits in shared /tmp.
+    fs.mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
     const file = `${INBOX_DIR}/${myId}.jsonl`;
-    // The reader (peer-message-fallback hook) truncates this on every user
+    // The reader (a UserPromptSubmit hook) truncates this on every user
     // prompt, but a session that never prompts again -- or a hook that is
     // disabled -- would let it grow without limit. Drop the oldest half rather
     // than the newest message: the newest is the one still worth delivering.
@@ -188,7 +188,7 @@ function appendToInbox(msg: { from_id: string; from_summary: string; from_cwd: s
     } catch {
       // No file yet -- nothing to trim.
     }
-    fs.appendFileSync(file, JSON.stringify(msg) + "\n");
+    fs.appendFileSync(file, JSON.stringify(msg) + "\n", { mode: 0o600 });
   } catch (e) {
     log(`Inbox write failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -203,7 +203,7 @@ let myGitRoot: string | null = null;
 // --- MCP Server ---
 
 const mcp = new Server(
-  { name: "claude-peers", version: "0.1.0" },
+  { name: "claude-peers", version: "0.2.0" },
   {
     capabilities: {
       experimental: { "claude/channel": {} },

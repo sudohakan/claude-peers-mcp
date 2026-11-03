@@ -41,13 +41,13 @@ afterAll(() => {
 });
 
 test("pinned ids from one process coexist", async () => {
-  await register("jarvis-a");
-  await register("jarvis-b");
-  await register("hcd-dashboard");
+  await register("leader-a");
+  await register("leader-b");
+  await register("dashboard");
   const ids = await listIds();
-  expect(ids).toContain("jarvis-a");
-  expect(ids).toContain("jarvis-b");
-  expect(ids).toContain("hcd-dashboard");
+  expect(ids).toContain("leader-a");
+  expect(ids).toContain("leader-b");
+  expect(ids).toContain("dashboard");
 });
 
 test("a session without a pinned id replaces its own earlier row", async () => {
@@ -60,9 +60,9 @@ test("a session without a pinned id replaces its own earlier row", async () => {
 });
 
 test("re-registering a pinned id keeps a single row", async () => {
-  await register("jarvis-a");
-  await register("jarvis-a");
-  expect((await listIds()).filter((id) => id === "jarvis-a")).toHaveLength(1);
+  await register("leader-a");
+  await register("leader-a");
+  expect((await listIds()).filter((id) => id === "leader-a")).toHaveLength(1);
 });
 
 test("kill-broker stops the broker and leaves its connected clients running", async () => {

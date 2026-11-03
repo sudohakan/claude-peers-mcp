@@ -134,7 +134,7 @@ switch (cmd) {
       const health = await brokerFetch<{ status: string; peers: number }>("/health");
       console.log(`Broker has ${health.peers} peer(s). Shutting down...`);
       // Listener only: a bare port match also returns every connected client,
-      // which is each session's MCP server and the HCD backend.
+      // which is each session's MCP server and any other broker client.
       const proc = Bun.spawnSync(["lsof", "-ti", `tcp:${BROKER_PORT}`, "-sTCP:LISTEN"]);
       const pids = new TextDecoder()
         .decode(proc.stdout)
