@@ -546,7 +546,7 @@ async function main() {
   let initialSummary = "";
   const ttyName = readTtyName(tty);
   if (ttyName) {
-    initialSummary = `${ttyName} — oturum başlıyor`;
+    initialSummary = `${ttyName} — session starting`;
     log(`Session name from tty map: ${ttyName}`);
   }
 
