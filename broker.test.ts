@@ -85,3 +85,28 @@ test("kill-broker stops the broker and leaves its connected clients running", as
   client.kill();
   expect(clientAlive).toBe(true);
 });
+
+test("a stable session id keeps its mail while its terminal reconnects", async () => {
+  const sender = await register(undefined);
+  const sent = (await post("/send-message", { from_id: sender.id, to_id: "s-0f0f0f0f", text: "while away" })) as { ok: boolean };
+  expect(sent.ok).toBe(true);
+  await register("s-0f0f0f0f");
+  const got = (await post("/poll-messages", { id: "s-0f0f0f0f", pid: process.pid })) as { messages: Array<{ text: string }> };
+  expect(got.messages.map((m) => m.text)).toEqual(["while away"]);
+});
+
+test("an older process polling a taken-over id gets nothing", async () => {
+  const sender = await register(undefined);
+  await register("s-1a1a1a1a", process.pid);
+  await post("/send-message", { from_id: sender.id, to_id: "s-1a1a1a1a", text: "for the new one" });
+  const stale = (await post("/poll-messages", { id: "s-1a1a1a1a", pid: process.pid + 1 })) as { messages: unknown[] };
+  expect(stale.messages.length).toBe(0);
+  const fresh = (await post("/poll-messages", { id: "s-1a1a1a1a", pid: process.pid })) as { messages: unknown[] };
+  expect(fresh.messages.length).toBe(1);
+});
+
+test("a random id that is gone still answers not found", async () => {
+  const sender = await register(undefined);
+  const sent = (await post("/send-message", { from_id: sender.id, to_id: "zzzzzzzz", text: "x" })) as { ok: boolean };
+  expect(sent.ok).toBe(false);
+});

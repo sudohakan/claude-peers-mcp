@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -425,7 +426,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
       try {
-        const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId });
+        const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId, pid: process.pid });
         if (result.messages.length === 0) {
           return {
             content: [{ type: "text" as const, text: "No new messages." }],
@@ -466,7 +467,7 @@ async function pollAndPushMessages() {
   if (!myId) return;
 
   try {
-    const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId });
+    const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId, pid: process.pid });
 
     for (const msg of result.messages) {
       // Look up the sender's info for context
@@ -578,7 +579,14 @@ async function main() {
   }
 
   // 4. Register with broker
+  // Fork: a terminal keeps one peer id across MCP reconnects, /clear and resumes,
+  // so a message sent before the reconnect still reaches the session in that
+  // terminal. The session name is not part of it: the SessionStart hook may write
+  // the name after this server registers. Without a tty (headless) the broker
+  // picks a random id as before.
+  const stableId = tty ? "s-" + createHash("sha1").update(tty).digest("hex").slice(0, 8) : undefined;
   const reg = await brokerFetch<RegisterResponse>("/register", {
+    ...(stableId ? { id: stableId } : {}),
     pid: process.pid,
     cwd: myCwd,
     git_root: myGitRoot,

@@ -77,7 +77,12 @@ function cleanStalePeers() {
   for (const peer of peers) {
     if (!isProcessAlive(peer.pid)) {
       db.run("DELETE FROM peers WHERE id = ?", [peer.id]);
-      db.run("DELETE FROM messages WHERE to_id = ? AND delivered = 0", [peer.id]);
+      // Stable session ids come back after a reconnect: keep their mail for a day.
+      if (peer.id.startsWith("s-")) {
+        db.run("DELETE FROM messages WHERE to_id = ? AND delivered = 0 AND sent_at < ?", [peer.id, new Date(Date.now() - 86_400_000).toISOString()]);
+      } else {
+        db.run("DELETE FROM messages WHERE to_id = ? AND delivered = 0", [peer.id]);
+      }
     }
   }
 }
@@ -217,7 +222,9 @@ function handleListPeers(body: ListPeersRequest): Peer[] {
 function handleSendMessage(body: SendMessageRequest): { ok: boolean; error?: string } {
   // Verify target exists
   const target = db.query("SELECT id FROM peers WHERE id = ?").get(body.to_id) as { id: string } | null;
-  if (!target) {
+  // A stable session id ("s-") is held while its terminal reconnects: queue the
+  // message and deliver it when the same terminal registers again.
+  if (!target && !body.to_id.startsWith("s-")) {
     return { ok: false, error: `Peer ${body.to_id} not found` };
   }
 
@@ -225,7 +232,13 @@ function handleSendMessage(body: SendMessageRequest): { ok: boolean; error?: str
   return { ok: true };
 }
 
-function handlePollMessages(body: PollMessagesRequest): PollMessagesResponse {
+function handlePollMessages(body: PollMessagesRequest & { pid?: number }): PollMessagesResponse {
+  // A stable id outlives its process: after a reconnect the newer process owns the
+  // id, and an older one still polling must not take the session's messages.
+  if (body.pid !== undefined) {
+    const owner = db.query("SELECT pid FROM peers WHERE id = ?").get(body.id) as { pid: number } | null;
+    if (owner && owner.pid !== body.pid) return { messages: [] };
+  }
   const messages = selectUndelivered.all(body.id) as Message[];
 
   // Mark them as delivered
